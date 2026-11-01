@@ -159,8 +159,15 @@ def parse_security_info(payload: dict[str, Any], *, token: str,
     if not isinstance(data, dict) or not isinstance(data.get("attributes"), dict):
         raise ValueError("Unrecognized GeckoTerminal token-info response")
     attrs = data["attributes"]
-    if attrs.get("address") != token:
-        raise ValueError("GeckoTerminal token-info mint does not match request")
+    # The token-info endpoint can identify a token by JSON:API data.id alone.
+    # Its metadata attributes do not consistently contain an address field.
+    claimed_address = attrs.get("address")
+    claimed_id = data.get("id")
+    if claimed_address is not None:
+        if claimed_address != token:
+            raise ValueError("GeckoTerminal token-info mint does not match request")
+    elif claimed_id != f"solana_{token}":
+        raise ValueError("GeckoTerminal token-info ID does not match request")
     mint = (attrs.get("mint_authority") is None) if "mint_authority" in attrs else None
     freeze = (attrs.get("freeze_authority") is None) if "freeze_authority" in attrs else None
     holders = attrs.get("holders") or {}
