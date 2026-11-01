@@ -1,0 +1,31 @@
+name: Live GeckoTerminal smoke
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'launchlab/**'
+      - 'scripts/live_smoke.py'
+      - '.github/workflows/live-smoke.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  gecko-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Fetch real Solana pools and token info, persist and report (read-only)
+        run: python -m scripts.live_smoke --summary "$RUNNER_TEMP/live-smoke.json"
+      - name: Upload smoke-test summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-geckoterminal-summary
+          path: ${{ runner.temp }}/live-smoke.json
+          if-no-files-found: ignore
