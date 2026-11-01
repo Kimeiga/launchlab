@@ -97,3 +97,21 @@ class SecurityInfoTests(unittest.TestCase):
         s = parse_security_info(payload, token='MintToken', observed_at=1793550000)
         self.assertFalse(s.mint_revoked)
         self.assertTrue(s.freeze_revoked)
+
+
+class RealisticTokenInfoTests(unittest.TestCase):
+    def test_info_identified_by_jsonapi_id_without_address_attribute(self):
+        from launchlab.gecko import parse_security_info
+        mint = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+        result = parse_security_info({"data": {"id": f"solana_{mint}",
+            "type": "token", "attributes": {"name": "USDC", "symbol": "USDC"}}},
+            token=mint, observed_at=1793550000)
+        self.assertIsNone(result.mint_revoked)
+        self.assertIsNone(result.freeze_revoked)
+        self.assertIsNone(result.top10_pct)
+
+    def test_missing_matching_id_not_trusted(self):
+        from launchlab.gecko import parse_security_info
+        with self.assertRaises(ValueError):
+            parse_security_info({"data": {"id": "solana_someOtherMint", "attributes": {"name": "x"}}},
+                token="EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", observed_at=1793550000)
