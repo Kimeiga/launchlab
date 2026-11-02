@@ -9,6 +9,7 @@ import json
 import os
 import sys
 from collections import Counter, defaultdict
+from contextlib import closing
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -110,7 +111,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         cfg = replace(Config(), initial_cash=args.initial_cash,
                       position_fraction=args.position_fraction)
-        with connect(args.db) as db:
+        with closing(connect(args.db)) as db:
             summary, report, observations, securities = evaluate(
                 db, start=timestamp(args.start), end=timestamp(args.end), cfg=cfg)
         for dest in (args.summary, args.json, args.html):
