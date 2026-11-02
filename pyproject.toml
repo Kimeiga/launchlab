@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "launchlab-research"
-version = "0.2.0"
+version = "0.3.0"
 description = "Read-only, evidence-first Solana token signal research"
 requires-python = ">=3.10"
 authors = [{name = "LaunchLab"}]
