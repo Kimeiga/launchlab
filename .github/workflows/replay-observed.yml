@@ -1,0 +1,81 @@
+name: Replay observed paper strategies
+
+# Read-only evaluation of snapshots collected at the time; not a historical
+# reconstruction or a real-money trading workflow.
+on:
+  workflow_dispatch:
+    inputs:
+      start_at:
+        description: 'Optional ISO-8601 start (UTC, e.g. 2026-11-02T06:00:00Z)'
+        type: string
+        required: false
+      end_at:
+        description: 'Optional ISO-8601 end (UTC)'
+        type: string
+        required: false
+  pull_request:
+    paths:
+      - '.github/workflows/replay-observed.yml'
+      - 'scripts/evaluate_observed.py'
+      - 'tests/test_evaluate_observed.py'
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  replay:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Restore latest cumulative live-observation checkpoint
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p data
+          last_run=$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=launchlab-market-db&per_page=100" \
+            --jq '[.artifacts[] | select(.expired == false) | .workflow_run.id][0] // empty')
+          if [[ -z "$last_run" ]]; then
+            echo "No real market checkpoint exists; refusing synthetic evaluation." >&2
+            exit 1
+          fi
+          echo "Using archived live data from collector run $last_run"
+          gh run download "$last_run" -R "$GITHUB_REPOSITORY" -n launchlab-market-db -D data
+          python - <<'PY'
+          import sqlite3
+          with sqlite3.connect('data/market.sqlite') as db:
+              assert db.execute('PRAGMA quick_check').fetchone()[0] == 'ok'
+          PY
+      - name: Replay read-only strategies and audit evidence quality
+        env:
+          START_AT: ${{ inputs.start_at }}
+          END_AT: ${{ inputs.end_at }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          set --
+          if [[ -n "$START_AT" ]]; then set -- "$@" --start "$START_AT"; fi
+          if [[ -n "$END_AT" ]]; then set -- "$@" --end "$END_AT"; fi
+          python -m scripts.evaluate_observed --db data/market.sqlite \
+            --summary outputs/observed-summary.json \
+            --json outputs/observed-report.json \
+            --html outputs/observed-report.html "$@"
+          python -m scripts.data_quality --db data/market.sqlite \
+            --out outputs/data-quality.json
+      - name: Upload reproducible replay outputs
+        uses: actions/upload-artifact@v4
+        with:
+          name: launchlab-observed-replay
+          path: |
+            outputs/observed-summary.json
+            outputs/observed-report.json
+            outputs/observed-report.html
+            outputs/data-quality.json
+          retention-days: 90
+          if-no-files-found: error

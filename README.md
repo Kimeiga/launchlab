@@ -141,6 +141,37 @@ with storage on a host or volume you control is required for denser coverage.
 Neither collection mode has a verified complete universe of all token
 launches, and neither creates evidence of profitability on its own.
 
+## Replay only observations actually collected
+
+The on-demand **Replay observed paper strategies** GitHub Action restores the
+latest unexpired market SQLite checkpoint and writes a machine-readable
+summary, a complete trade-level JSON report, the self-contained HTML report,
+and a data-quality audit. The action also runs when the replay workflow or
+evaluator changes in a pull request. It does not place orders or trigger
+recurring trading jobs.
+
+Run this locally on a previously collected checkpoint:
+
+```bash
+python -m scripts.evaluate_observed --db data/market.sqlite
+# Optionally restrict the actual observation window:
+python -m scripts.evaluate_observed --db data/market.sqlite \
+  --start 2026-11-02T06:00:00Z --end 2026-11-02T16:00:00Z
+```
+
+No synthetic or arbitrary imported price records are allowed in an observed
+replay. Historical security records are used only if their observations were
+available by decision time, including when the output interval is restricted.
+The replay does **not** backfill missing prices from current providers or
+retroactively infer mint authority from present-day status.
+
+A reported **0% return with 0 closed trades is not a break-even
+strategy result**: it means the safety, signal, and execution conditions never
+produced an observable completed paper trade. Results from actual trades, if
+present, are still exploratory due to incomplete pool-universe discovery,
+provider caching, gaps, and approximate execution costs.
+
+
 ## Explicit limitations
 
 This is a **forward observation research instrument**, not a validated
