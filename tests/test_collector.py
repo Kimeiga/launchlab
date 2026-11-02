@@ -160,6 +160,35 @@ class RefreshSchedulingTests(unittest.TestCase):
         self.assertEqual(discovery.call_count, 6)
 
     @patch("launchlab.cli.fetch_pools_by_address", return_value=[])
+    @patch("launchlab.cli.fetch_new_pools")
+    @patch("launchlab.cli.time.time", return_value=1800000000)
+    def test_refresh_budget_preserves_series_and_admits_new_cohorts(
+            self, clock, discovery, multi):
+        discovery.side_effect = [discovery_page(1, page, 1800000000)
+                                 for page in range(1, 4)]
+        established = ["3" * 31 + BASE58[i] for i in range(45)]
+        starters = ["5" * 31 + BASE58[i] for i in range(60)]
+        with connect(":memory:") as db:
+            add_snapshots(db, [
+                Snapshot(pool=pool, token="4" * 32, observed_at=t, price_usd=1,
+                         liquidity_usd=1000, source="geckoterminal")
+                for pool in established for t in (1799990000, 1799995000)
+            ] + [
+                Snapshot(pool=pool, token="4" * 32, observed_at=1799998000,
+                         price_usd=1, liquidity_usd=1000, source="geckoterminal")
+                for pool in starters
+            ])
+            self.assertEqual(collect_once(db, max_tracked=40,
+                                          max_enrich=0, new_pages=3), (60, 60, 0, 0))
+        refreshed = [pool for call in multi.call_args_list for pool in call.args[0]]
+        self.assertEqual(len(refreshed), 40)
+        self.assertEqual(len(set(refreshed) & set(established)), 30)
+        self.assertEqual(len(set(refreshed) & set(starters)), 10)
+        self.assertTrue(all(len(call.args[0]) <= 20 for call in multi.call_args_list))
+        self.assertEqual(discovery.call_count, 3)
+
+
+    @patch("launchlab.cli.fetch_pools_by_address", return_value=[])
     @patch("launchlab.cli.fetch_new_pools", return_value=[])
     @patch("launchlab.cli.time.time")
     def test_failed_pool_reads_rotate_fairly_across_restarts(self, clock, discovery, multi):
