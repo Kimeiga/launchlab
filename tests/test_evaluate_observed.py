@@ -72,6 +72,7 @@ class ObservedReplayTests(unittest.TestCase):
             path = Path(folder)
             with connect(path / "market.sqlite") as db:
                 add_snapshots(db, [quote(T), quote(T + 60)])
+            db.close()  # Windows cannot remove temporary files still held open.
             self.assertEqual(main([
                 "--db", str(path / "market.sqlite"),
                 "--summary", str(path / "summary.json"),
