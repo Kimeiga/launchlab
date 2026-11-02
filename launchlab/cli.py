@@ -85,10 +85,12 @@ def collect_once(db, max_tracked: int = 40, max_enrich: int = 2,
     updated = 0
     for i in range(0, len(refresh), 20):
         addresses = refresh[i:i + 20]
-        # Persist attempts even when a pool disappears or the provider fails.
-        # An attempt is not a price observation.
-        record_refresh_attempts(db, addresses, int(time.time()))
-        batch = fetch_pools_by_address(addresses)
+        # Record the attempted request even if the provider fails or omits a
+        # pool. Never mistake an attempt for a price observation.
+        try:
+            batch = fetch_pools_by_address(addresses)
+        finally:
+            record_refresh_attempts(db, addresses, int(time.time()))
         updated += add_snapshots(db, batch)
     # Request token-info details for a small number of liquid candidates.
     # Provider may not report fresh holder distribution; such evidence remains
