@@ -11,6 +11,7 @@ from .demo import make_demo
 from .engine import Config, simulate
 from .gecko import fetch_new_pools, fetch_pools_by_address, fetch_token_security
 from .models import SecurityObservation, Snapshot
+from .onchain import fetch_onchain_security
 from .report import render_report
 from .storage import add_securities, add_snapshots, connect, latest_snapshots, securities_all, snapshots_all
 
@@ -55,10 +56,22 @@ def _import_csv(db, path: str, model: str) -> int:
     return add_snapshots(db, items)
 
 
-def collect_once(db, max_tracked: int = 40, max_enrich: int = 2) -> tuple[int, int, int, int]:
+def collect_once(db, max_tracked: int = 40, max_enrich: int = 2,
+                 new_pages: int = 1, rpc_fallback: bool = True) -> tuple[int, int, int, int]:
     if not 0 <= max_tracked <= 100 or not 0 <= max_enrich <= 4:
         raise ValueError("max_tracked must be 0..100 and max_enrich 0..4")
-    new = fetch_new_pools()
+    if not 1 <= new_pages <= 5:
+        raise ValueError("new_pages must be 1..5")
+    # Later pages reduce (but do not eliminate) discovery/survivorship bias.
+    # Do not rewrite the original provider observation timestamps.
+    new = []
+    seen_pools = set()
+    for page in range(1, new_pages + 1):
+        batch = fetch_new_pools(page=page) if page > 1 else fetch_new_pools()
+        for snapshot in batch:
+            if snapshot.pool not in seen_pools:
+                new.append(snapshot)
+                seen_pools.add(snapshot.pool)
     added = add_snapshots(db, new)
     # Keep refreshing pools we have actually observed recently: without this,
     # the new-pool discovery endpoint only creates a one-point time series.
@@ -89,10 +102,26 @@ def collect_once(db, max_tracked: int = 40, max_enrich: int = 2) -> tuple[int, i
             break
     enriched = 0
     for token in tokens_to_check[:max_enrich]:
+        best = None
         try:
-            enriched += add_securities(db, [fetch_token_security(token)])
+            best = fetch_token_security(token)
         except (RuntimeError, ValueError) as error:
-            print(f"Security info unavailable for {token[:10]}…: {error}", file=sys.stderr)
+            print(f"Token-info unavailable for {token[:10]}…: {error}", file=sys.stderr)
+        # Gecko's new-token endpoint may return 404 or incomplete holder data.
+        # Fall back to observable SPL mint authorities and raw token accounts.
+        if rpc_fallback and (best is None or any((best.mint_revoked is None,
+                                                   best.freeze_revoked is None,
+                                                   best.top10_pct is None))):
+            try:
+                onchain = fetch_onchain_security(token)
+                known = lambda o: sum(v is not None for v in
+                    (o.mint_revoked, o.freeze_revoked, o.top10_pct))
+                if best is None or known(onchain) >= known(best):
+                    best = onchain
+            except (RuntimeError, ValueError) as error:
+                print(f"Solana RPC unavailable for {token[:10]}…: {error}", file=sys.stderr)
+        if best is not None:
+            enriched += add_securities(db, [best])
     return len(new), added, updated, enriched
 
 
@@ -119,10 +148,14 @@ def main(argv: list[str] | None = None) -> int:
     collect = sub.add_parser("collect", help="Get new pools and refresh recent pools once")
     collect.add_argument("--max-tracked", type=int, default=40)
     collect.add_argument("--max-enrich", type=int, default=2)
+    collect.add_argument("--new-pages", type=int, default=3)
+    collect.add_argument("--no-rpc-fallback", action="store_true")
     watch = sub.add_parser("watch", help="Observe new pools periodically; no trades")
     watch.add_argument("--interval", type=int, default=90)
     watch.add_argument("--max-tracked", type=int, default=40)
     watch.add_argument("--max-enrich", type=int, default=2)
+    watch.add_argument("--new-pages", type=int, default=3)
+    watch.add_argument("--no-rpc-fallback", action="store_true")
     snap = sub.add_parser("import-snapshots", help="Import timestamped observations from CSV")
     snap.add_argument("csv_file")
     security = sub.add_parser("import-security", help="Import as-of security observations from CSV")
@@ -145,7 +178,9 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"HTML: {Path(args.html).resolve()}\nJSON: {Path(args.json).resolve()}")
                 return 0
             if args.command == "collect":
-                new, added, refreshed, enriched = collect_once(db, args.max_tracked, args.max_enrich)
+                new, added, refreshed, enriched = collect_once(
+                    db, args.max_tracked, args.max_enrich, args.new_pages,
+                    rpc_fallback=not args.no_rpc_fallback)
                 print(f"Discovered {new} pools; stored {added} new records, {refreshed} refreshed records, {enriched} security observations.")
                 print("Token-info evidence is provider-dependent. Missing/stale security fields fail closed.")
                 return 0
@@ -157,7 +192,9 @@ def main(argv: list[str] | None = None) -> int:
                     while True:
                         started = time.monotonic()
                         try:
-                            n, a, r, e = collect_once(db, args.max_tracked, args.max_enrich)
+                            n, a, r, e = collect_once(
+                                db, args.max_tracked, args.max_enrich, args.new_pages,
+                                rpc_fallback=not args.no_rpc_fallback)
                             print(f"{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}: {n} discovered, {a} new, {r} refreshed, {e} security", flush=True)
                         except RuntimeError as error:
                             print(f"Read error (will retry next cycle): {error}", file=sys.stderr, flush=True)

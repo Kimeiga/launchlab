@@ -1,6 +1,6 @@
 # LaunchLab
 
-**Research-only Solana launch scanner and paper-strategy evaluator (v0.2)**. It never
+**Research-only Solana launch scanner and paper-strategy evaluator (v0.3)**. It never
 connects to a wallet, signs a transaction, or places an order.
 
 This is a first implementation of the question: *Do rule-based token filters
@@ -14,8 +14,9 @@ python -m launchlab --db data/demo.sqlite demo --html outputs/demo.html --json o
 # Open outputs/demo.html in a browser.
 
 # Live market observations, read-only, no API key required:
-python -m launchlab --db data/market.sqlite collect
-python -m launchlab --db data/market.sqlite watch --interval 90
+python -m launchlab --db data/market.sqlite collect --new-pages 3
+python -m launchlab --db data/market.sqlite watch --interval 90 --new-pages 3
+python -m scripts.data_quality --db data/market.sqlite --out outputs/data-quality.json
 
 # Add actual, contemporaneous security observations from a verified source:
 python -m launchlab --db data/market.sqlite import-security examples/security_template.csv
@@ -35,15 +36,25 @@ trading result. Do not mix the synthetic database with live observations.
 
 - The documented GeckoTerminal Public API: `GET /networks/solana/new_pools`
   and `GET /networks/solana/pools/multi/{addresses}`.
-  - Pool discovery, repeated sampling, provider rate-limit retry/backoff,
-    SQLite storage, timestamps at ingestion. Discovery fetches only the
-    first page, and refreshing is capped, so it is NOT a complete launch
-    universe and must not be used to estimate population-level success rates.
+  - Pool discovery across up to five pages (default three in CLI), repeated
+    sampling, provider rate-limit retry/backoff, SQLite storage, timestamps at
+    ingestion. Refreshing is capped, schedules can skip observations, and
+    these pages are NOT a complete launch universe or an unbiased sample.
   - GeckoTerminal token info for up to 2 candidates per collection cycle (configurable),
     attempting mint/freeze flags and top-ten token-account concentration only
     when the source fields are present and holder data is recent. Missing/stale
     fields stay unknown. This is not wallet-cluster-aware ownership analysis.
-  - No private keys or API credentials.
+  - On missing/incomplete Gecko token-info, optionally queries **read-only
+    Solana JSON-RPC** (`getAccountInfo` with `jsonParsed` and
+    `getTokenLargestAccounts`) for classic SPL Token mint/freeze authorities
+    and top-ten raw token-account share. `--no-rpc-fallback` disables this.
+    The public endpoint can rate-limit. Set `SOLANA_RPC_URL` to another trusted
+    HTTPS Solana mainnet RPC provider if available. No transactions are sent.
+    Token-2022 mints are deliberately marked unknown (extensions unsupported).
+    Raw account concentration can include LP vaults; it does NOT measure
+    coordinated beneficial ownership. Missing or inconsistent RPC readings
+    remain unknown, not a passing safety result.
+  - No private keys or API credentials are required by default.
 - Importable security observations, valid only **at or before** decision time.
   - Mint and freeze authority revoked, top-ten concentration ≤25%, pool
     liquidity ≥$40k. Security evidence older than 30 minutes is rejected. Missing information blocks the pool.
@@ -103,6 +114,24 @@ token,observed_at,mint_revoked,freeze_revoked,top10_pct,source,holder_updated_at
   not the same as a valid zero reading. Cached price data cannot validate
   execution latency or intra-minute high/low stops.
 
+## Collection using GitHub Actions
+
+`.github/workflows/collect-observations.yml` runs **once per hour**, on
+manual dispatch, and on relevant pushes to `main`. It restores the latest
+successful `launchlab-market-db` artifact, samples live pools, checks up to
+two candidate tokens, writes data-quality metrics and uploads the cumulative
+SQLite checkpoint plus the report. Concurrent collectors are serialized.
+Check the `launchlab-data-quality` artifact for missingness and sample depth.
+GitHub artifacts expire (configured to 90 days), so this is **provisional
+persistence**, not durable storage. A failed checkpoint restore fails the run
+rather than resetting history silently.
+
+Hourly sampling misses many short-lived launches and is NOT adequate for an
+unbiased memecoin backtest. A persistent worker using `watch --interval 90`
+with storage on a host or volume you control is required for denser coverage.
+Neither collection mode has a verified complete universe of all token
+launches, and neither creates evidence of profitability on its own.
+
 ## Explicit limitations
 
 This is a **forward observation research instrument**, not a validated
@@ -126,6 +155,8 @@ sampled prices and only fill if a later quote exists: a configured stop is
 not a guaranteed loss bound.
 
 Source references:
+- Solana `getAccountInfo` (jsonParsed): https://solana.com/docs/rpc/http/getaccountinfo
+- Solana `getTokenLargestAccounts`: https://solana.com/docs/rpc/http/gettokenlargestaccounts
 - GeckoTerminal API: https://api.geckoterminal.com/docs/index.html
 - GeckoTerminal v2 OpenAPI: https://api.geckoterminal.com/docs/v2/swagger.json
 - Solana token authorities and RugCheck: https://solana.com/docs/tokens/how-to-verify-a-token
@@ -133,18 +164,19 @@ Source references:
 
 ## Security
 
-Read-only network GETs to a fixed GeckoTerminal host. SQLite and local HTML
-are the only outputs. No wallet/seed collection, auto-trading, network POSTs,
-telemetry, CDN scripts, or remote assets.
+Read-only GeckoTerminal GETs to a fixed host; the on-chain integration uses
+read-only JSON-RPC **POST** requests to `getAccountInfo` and
+`getTokenLargestAccounts` only, via HTTPS. SQLite, JSON and local HTML are the
+outputs, plus GitHub workflow artifacts where enabled. No wallet/seed
+collection, auto-trading, signing, transaction submission, telemetry, CDN
+scripts, or remote assets.
 
 ## Verification status
 
-- 36 offline automated tests cover the simulator, ingestion, report generation,
-  provider parsing, fill-time checks, token identity, future timestamps, and
-  backwards-compatible SQLite migration.
-- **Real GeckoTerminal GET requests could not be exercised in the artifact
-  building environment because its external network access was unavailable.**
-  The public API integration therefore needs a live smoke test before relying
-  on unattended collection. Endpoint and field names were checked against
-  GeckoTerminal's published API documentation.
+- Offline automated tests cover simulation, parsing, RPC response guards,
+  collector fallback, data quality, and SQLite migration on Python 3.10/3.13.
+- GitHub Actions has a successful read-only GeckoTerminal smoke test (PR #1).
+  A separate read-only Solana RPC smoke test uses the *public USDC mint* for
+  parsing compatibility, NOT a newly launched token and NOT trade execution.
+  Public RPC availability is independent of code correctness and may fluctuate.
 - The HTML demo contains only synthetic inputs and illustrative output.

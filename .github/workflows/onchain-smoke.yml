@@ -1,0 +1,24 @@
+name: Live Solana RPC smoke
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'launchlab/onchain.py'
+      - 'scripts/onchain_smoke.py'
+      - '.github/workflows/onchain-smoke.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  rpc-read-only:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Verify live Solana mint authority parsing
+        run: python -m scripts.onchain_smoke
