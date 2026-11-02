@@ -13,7 +13,9 @@ from .gecko import fetch_new_pools, fetch_pools_by_address, fetch_token_security
 from .models import SecurityObservation, Snapshot
 from .onchain import fetch_onchain_security
 from .report import render_report
-from .storage import add_securities, add_snapshots, connect, latest_snapshots, securities_all, snapshots_all
+from .storage import (add_securities, add_snapshots, connect, latest_snapshots,
+                      record_refresh_attempts, select_refresh_candidates,
+                      securities_all, snapshots_all)
 
 
 def _nullable_number(row: dict[str, str], field: str, kind: type = float):
@@ -73,15 +75,20 @@ def collect_once(db, max_tracked: int = 40, max_enrich: int = 2,
                 new.append(snapshot)
                 seen_pools.add(snapshot.pool)
     added = add_snapshots(db, new)
-    # Keep refreshing pools we have actually observed recently: without this,
-    # the new-pool discovery endpoint only creates a one-point time series.
-    since = int(time.time()) - 24*3600
-    known = [s.pool for s in latest_snapshots(db, limit=200)
-             if s.source == "geckoterminal" and s.observed_at >= since]
-    refresh = known[:max_tracked]
+    # A discovery quote already samples that pool this cycle; do not spend a
+    # second API request on it. Refresh older observations with bounded,
+    # persistent attempt fairness instead of selecting the newest 200 pools.
+    now = int(time.time())
+    since = now - 24 * 3600
+    refresh = select_refresh_candidates(
+        db, since=since, until=now, exclude_pools=seen_pools, limit=max_tracked)
     updated = 0
     for i in range(0, len(refresh), 20):
-        batch = fetch_pools_by_address(refresh[i:i+20])
+        addresses = refresh[i:i + 20]
+        # Persist attempts even when a pool disappears or the provider fails.
+        # An attempt is not a price observation.
+        record_refresh_attempts(db, addresses, int(time.time()))
+        batch = fetch_pools_by_address(addresses)
         updated += add_snapshots(db, batch)
     # Request token-info details for a small number of liquid candidates.
     # Provider may not report fresh holder distribution; such evidence remains
