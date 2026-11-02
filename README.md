@@ -38,8 +38,17 @@ trading result. Do not mix the synthetic database with live observations.
   and `GET /networks/solana/pools/multi/{addresses}`.
   - Pool discovery across up to five pages (default three in CLI), repeated
     sampling, provider rate-limit retry/backoff, SQLite storage, timestamps at
-    ingestion. Refreshing is capped, schedules can skip observations, and
-    these pages are NOT a complete launch universe or an unbiased sample.
+    ingestion. Discovery always stores all fetched valid pools; those quotes do
+    not waste the same cycle's bounded refresh budget. Up to 40 previously
+    observed pools are refreshed in batches of 20 within a 24-hour recency
+    window. When both groups exist, roughly 75% of refresh capacity maintains
+    pools with 2+ observations and 25% admits single-observation pools;
+    unused slots are shared. SQLite records refresh *attempts* separately
+    from actual price quotes, so missing responses rotate fairly across runs.
+    This improves longitudinal sampling, but heavy discovery traffic can
+    still exceed refresh capacity; no pool is guaranteed continuous coverage.
+    Scheduled runs can be delayed or skipped, and discovery is NOT a complete
+    launch universe or an unbiased sample.
   - GeckoTerminal token info for up to 2 candidates per collection cycle (configurable),
     attempting mint/freeze flags and top-ten token-account concentration only
     when the source fields are present and holder data is recent. Missing/stale
