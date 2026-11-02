@@ -167,7 +167,7 @@ class RefreshSchedulingTests(unittest.TestCase):
         discovery.side_effect = [discovery_page(1, page, 1800000000)
                                  for page in range(1, 4)]
         established = ["3" * 31 + BASE58[i] for i in range(45)]
-        starters = ["5" * 31 + BASE58[i] for i in range(60)]
+        starters = ["5" * 30 + BASE58[i // 58] + BASE58[i % 58] for i in range(60)]
         with connect(":memory:") as db:
             add_snapshots(db, [
                 Snapshot(pool=pool, token="4" * 32, observed_at=t, price_usd=1,
