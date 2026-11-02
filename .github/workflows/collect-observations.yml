@@ -1,0 +1,75 @@
+name: Collect Solana observations
+
+# Sparse point-in-time sampling, NOT a complete launch universe.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/collect-observations.yml'
+      - 'launchlab/cli.py'
+      - 'launchlab/onchain.py'
+      - 'scripts/data_quality.py'
+  schedule:
+    - cron: '17 * * * *'
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: launchlab-market-collector
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Restore last observation checkpoint
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p data
+          last_run=$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts?name=launchlab-market-db&per_page=100" \
+            --jq '[.artifacts[] | select(.expired == false) | .workflow_run.id][0] // empty')
+          if [[ -n "$last_run" ]]; then
+            echo "Restoring checkpoint from workflow run $last_run"
+            gh run download "$last_run" -R "$GITHUB_REPOSITORY" -n launchlab-market-db -D data
+            test -s data/market.sqlite
+            python - <<'PY'
+          import sqlite3
+          with sqlite3.connect('data/market.sqlite') as db:
+              if db.execute('PRAGMA quick_check').fetchone()[0] != 'ok':
+                  raise RuntimeError('Restored SQLite checkpoint failed integrity check')
+          PY
+          else
+            echo 'No unexpired checkpoint found: start a NEW observation window.'
+          fi
+      - name: Collect current GeckoTerminal pools and on-chain evidence
+        run: |
+          python -m launchlab --db data/market.sqlite collect \
+            --new-pages 3 --max-tracked 40 --max-enrich 2
+      - name: Report observed coverage and missingness
+        run: |
+          python -m scripts.data_quality --db data/market.sqlite --out outputs/data-quality.json
+      - name: Save cumulative SQLite checkpoint
+        uses: actions/upload-artifact@v4
+        with:
+          name: launchlab-market-db
+          path: data/market.sqlite
+          if-no-files-found: error
+          retention-days: 90
+      - name: Save coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: launchlab-data-quality
+          path: outputs/data-quality.json
+          if-no-files-found: error
+          retention-days: 90
