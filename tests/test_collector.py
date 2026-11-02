@@ -188,6 +188,31 @@ class RefreshSchedulingTests(unittest.TestCase):
         self.assertEqual(discovery.call_count, 3)
 
 
+    @patch("launchlab.cli.fetch_pools_by_address",
+           side_effect=[RuntimeError("Gecko temporarily down"), []])
+    @patch("launchlab.cli.fetch_new_pools", return_value=[])
+    @patch("launchlab.cli.time.time")
+    def test_provider_errors_record_attempt_without_fabricating_quote(
+            self, clock, discovery, multi):
+        with connect(":memory:") as db:
+            add_snapshots(db, [
+                Snapshot(pool=char * 32, token="4" * 32, observed_at=1799999000,
+                         price_usd=1, liquidity_usd=1000, source="geckoterminal")
+                for char in ("3", "5")
+            ])
+            clock.return_value = 1800000000
+            with self.assertRaisesRegex(RuntimeError, "temporarily down"):
+                collect_once(db, max_tracked=1, max_enrich=0)
+            clock.return_value = 1800000090
+            self.assertEqual(collect_once(db, max_tracked=1,
+                                          max_enrich=0), (0, 0, 0, 0))
+            self.assertEqual(assess(db)["observations"], 2)
+            self.assertEqual(db.execute(
+                "SELECT COUNT(*) FROM refresh_attempts").fetchone()[0], 2)
+        self.assertEqual([c.args[0] for c in multi.call_args_list],
+                         [["3" * 32], ["5" * 32]])
+
+
     @patch("launchlab.cli.fetch_pools_by_address", return_value=[])
     @patch("launchlab.cli.fetch_new_pools", return_value=[])
     @patch("launchlab.cli.time.time")
