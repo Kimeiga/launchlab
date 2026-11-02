@@ -44,9 +44,9 @@ def verify_live() -> dict:
     # Newly created tokens may not have indexed metadata yet (404), so verify
     # token-info using a long-established Solana mint. This does NOT certify
     # that fresh launches have usable security observations.
-    token = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"  # USDC
-    security = fetch_token_security(token)
-    if security.token != token or security.source != "geckoterminal_token_info":
+    usdc_mint = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"  # Public Solana USDC mint address.
+    security = fetch_token_security(usdc_mint)
+    if security.token != usdc_mint or security.source != "geckoterminal_token_info":
         raise RuntimeError("token info normalization returned mismatched metadata")
     security.validate()
 

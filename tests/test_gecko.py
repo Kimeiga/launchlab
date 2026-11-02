@@ -2,6 +2,9 @@ import unittest
 from unittest.mock import patch
 from launchlab.gecko import parse_pools, fetch_new_pools, get_json
 
+# Public Solana mainnet USDC mint address, not an authentication credential.
+USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+
 MOCK_DATA = {
   'data': [{
     'id':'solana_poolABC','type':'pool',
@@ -102,7 +105,7 @@ class SecurityInfoTests(unittest.TestCase):
 class RealisticTokenInfoTests(unittest.TestCase):
     def test_info_identified_by_jsonapi_id_without_address_attribute(self):
         from launchlab.gecko import parse_security_info
-        mint = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+        mint = USDC_MINT
         result = parse_security_info({"data": {"id": f"solana_{mint}",
             "type": "token", "attributes": {"name": "USDC", "symbol": "USDC"}}},
             token=mint, observed_at=1793550000)
@@ -114,4 +117,4 @@ class RealisticTokenInfoTests(unittest.TestCase):
         from launchlab.gecko import parse_security_info
         with self.assertRaises(ValueError):
             parse_security_info({"data": {"id": "solana_someOtherMint", "attributes": {"name": "x"}}},
-                token="EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", observed_at=1793550000)
+                token=USDC_MINT, observed_at=1793550000)
