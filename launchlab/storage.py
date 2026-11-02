@@ -34,6 +34,10 @@ CREATE TABLE IF NOT EXISTS securities (
     PRIMARY KEY(token, observed_at)
 );
 CREATE INDEX IF NOT EXISTS securities_ts ON securities(observed_at);
+CREATE TABLE IF NOT EXISTS refresh_attempts (
+    pool TEXT PRIMARY KEY,
+    attempted_at INTEGER NOT NULL
+);
 """
 
 
@@ -116,3 +120,62 @@ def latest_snapshots(db: sqlite3.Connection, limit: int = 200) -> list[Snapshot]
         ON s.pool=x.pool AND s.observed_at=x.t
         ORDER BY s.observed_at DESC, s.pool LIMIT ?""", (limit,))
     return [Snapshot(**dict(row)) for row in rows]
+
+
+def select_refresh_candidates(
+    db: sqlite3.Connection, *, since: int, until: int,
+    exclude_pools: set[str], limit: int,
+) -> list[str]:
+    """Choose recent, previously observed GeckoTerminal pools for follow-up.
+
+    A quarter of capacity admits single-observation pools when both groups
+    exist; the rest maintains pools with an established price series. Unused
+    slots are borrowed by the other group. Within each group the least recently
+    *attempted* pools go first, including when a prior request returned no data.
+    """
+    if limit <= 0:
+        return []
+    rows = db.execute(
+        """SELECT s.pool, COUNT(*) AS observation_count,
+                  COALESCE(MAX(a.attempted_at), 0) AS last_attempted_at
+           FROM snapshots AS s
+           LEFT JOIN refresh_attempts AS a ON a.pool = s.pool
+           WHERE s.source = 'geckoterminal'
+           GROUP BY s.pool
+           HAVING MAX(s.observed_at) BETWEEN ? AND ?
+           ORDER BY last_attempted_at ASC, MAX(s.observed_at) ASC, s.pool ASC""",
+        (since, until),
+    )
+    established: list[str] = []
+    starters: list[str] = []
+    for row in rows:
+        if row["pool"] in exclude_pools:
+            continue  # Already sampled by discovery this cycle.
+        (established if row["observation_count"] >= 2 else starters).append(row["pool"])
+
+    starter_slots = max(1, (limit + 3) // 4) if limit > 1 else 0
+    selected = established[:limit - starter_slots] + starters[:starter_slots]
+    if len(selected) < limit:
+        selected_set = set(selected)
+        for pool in established + starters:
+            if pool not in selected_set:
+                selected.append(pool)
+                selected_set.add(pool)
+                if len(selected) == limit:
+                    break
+    return selected
+
+
+def record_refresh_attempts(
+    db: sqlite3.Connection, pools: list[str], attempted_at: int,
+) -> None:
+    """Record requests, not observations, so missing pools cannot monopolize slots."""
+    if not pools:
+        return
+    with db:
+        db.executemany(
+            """INSERT INTO refresh_attempts (pool, attempted_at) VALUES (?, ?)
+               ON CONFLICT(pool) DO UPDATE
+               SET attempted_at = MAX(refresh_attempts.attempted_at, excluded.attempted_at)""",
+            [(pool, attempted_at) for pool in pools],
+        )
